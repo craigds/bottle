@@ -384,7 +384,7 @@ def debug_scores(ctx, strategy, number):
     default="simple",
 )
 @click.option(
-    "-n", type=int, default=None, help="How many puzzles to do (default: all)"
+    "-n", type=int, default=None, help="How many puzzles to do (default: all to date)"
 )
 @click.pass_context
 def bulk(ctx, strategy, n):
