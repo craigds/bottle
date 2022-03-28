@@ -1,0 +1,8 @@
+starting-words.json
+venv/
+*.egg-info
+__pycache__
+*.pyc
+*.pyo
+.eggs/
+input-raw.txt
