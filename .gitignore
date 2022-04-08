@@ -6,3 +6,5 @@ __pycache__
 *.pyo
 .eggs/
 input-raw.txt
+env.yaml
+channel-history.json

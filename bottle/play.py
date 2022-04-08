@@ -85,9 +85,22 @@ class GameBot:
     ]
 
     def __init__(
-        self, number, *, cache_starting_words=True, debug_scores=False, share=False
+        self,
+        number,
+        *,
+        cache_starting_words=True,
+        debug_scores=False,
+        share=False,
+        use_solutions_list=False,
     ):
-        self.possible_words = dictionary[:]
+        if use_solutions_list:
+            # Use the solutions list as the dictionary. This means less stupid guesses
+            # for words like 'GOMPA' that a human would know aren't really actually words.
+            # However, it feels like 'cheating' in a way...
+            # TODO: find another source of humanness, e.g. a word popularity score.
+            self.possible_words = solutions[:]
+        else:
+            self.possible_words = dictionary[:]
 
         self.possible_chars = [
             set(string.ascii_lowercase),
@@ -160,7 +173,20 @@ class GameBot:
         """
         # These are the chars that we'll assume will give us no match.
         chars_to_remove = set(word) - self.required_chars
-        other_chars = [x - chars_to_remove for x in self.possible_chars]
+        other_chars = [x.copy() for x in self.possible_chars]
+        for x in other_chars:
+            if len(x) == 1:
+                # If the letter is already green, don't try to remove any chars.
+                continue
+            elif x <= chars_to_remove:
+                # Let's just assume we'll get a green here.
+                # In practice this never seems to actually happen; I can run all 286 puzzles to date without hitting this condition :)
+                assumed_green = list(x)[0]
+                x.difference_update(chars_to_remove)
+                x.add(assumed_green)
+            else:
+                x.difference_update(chars_to_remove)
+
         remaining_words = [
             other
             for other in self.possible_words
@@ -209,18 +235,22 @@ class GameBot:
 
         return word_scores[0][1]
 
-    def share_output(self, guesses, feedbacks):
+    def produce_output(self, guesses, feedbacks):
         solved = feedbacks[-1] == SOLVED
         n = len(guesses) if solved else "X"
 
-        click.echo(f"Wordle #{self.number} {n}/6*\n")
+        self.output = []
+        self.output.append(f"Wordle #{self.number} {n}/6*\n")
         for guess, feedback in zip(guesses, feedbacks):
             if not self.share:
-                click.echo(guess)
-            click.echo(feedback)
+                self.output.append(guess)
+            self.output.append(feedback)
 
         i = len(guesses) - 1 if solved else -1
-        click.echo(self.SHARE_EMOJI[i])
+        self.output.append(self.SHARE_EMOJI[i])
+
+        for line in self.output:
+            click.echo(line)
 
     def __iter__(self):
         guesses = []
@@ -235,7 +265,7 @@ class GameBot:
             guesses.append(f"{widen_chars(candidate).upper()}")
             feedbacks.append(f"{feedback}")
             if feedback == SOLVED:
-                self.share_output(guesses, feedbacks)
+                self.produce_output(guesses, feedbacks)
                 return
             for char, f, pc_set in zip(candidate, feedback, self.possible_chars):
                 if f == "⬜":
@@ -247,14 +277,24 @@ class GameBot:
                 elif f == "🟩":
                     # this char is now the only possible candidate for this position
                     pc_set.intersection_update({char})
+                    self.required_chars.discard(char)
                 elif f == "🟨":
                     # this char can no longer be considered in this position
                     pc_set.discard(char)
                     # Also, future guesses must include this char
                     self.required_chars.add(char)
             self._refresh_possible_words()
-        self.share_output(guesses, feedbacks)
+        self.produce_output(guesses, feedbacks)
         raise Failure
+
+
+class LosingGameBot(GameBot):
+    """
+    A bot that inverts the score metric, always choosing the worst word it can find.
+    """
+
+    def _score_word(self, word):
+        return -super()._score_word(word)
 
 
 class WeightedScoreGameBot(GameBot):
@@ -340,38 +380,25 @@ def play_game(bot, solution):
     default=get_today_number(),
 )
 @click.option("--share", is_flag=True)
+@click.option("--badly", is_flag=True)
+@click.option("--debug-scores", is_flag=True)
+@click.option("--use-solutions-list", is_flag=True)
 @click.pass_context
-def play(ctx, strategy, number, share):
+def play(ctx, strategy, number, share, badly, debug_scores, use_solutions_list):
     try:
         solution = get_todays_word(number)
 
-        bot_cls = GameBot if strategy == "simple" else WeightedScoreGameBot
-        bot = bot_cls(number, share=share)
-        play_game(bot, solution)
-    except Exception:
-        ipdb.post_mortem()
-
-
-@click.command()
-@click.option(
-    "--strategy",
-    type=click.Choice(["weighted", "simple"]),
-    default="simple",
-)
-@click.argument(
-    "number",
-    type=int,
-    nargs=1,
-    required=False,
-    default=get_today_number(),
-)
-@click.pass_context
-def debug_scores(ctx, strategy, number):
-    try:
-        solution = get_todays_word(number)
-
-        bot_cls = GameBot if strategy == "simple" else WeightedScoreGameBot
-        bot = bot_cls(number, cache_starting_words=False, debug_scores=True)
+        if badly:
+            bot_cls = LosingGameBot
+        else:
+            bot_cls = GameBot if strategy == "simple" else WeightedScoreGameBot
+        bot = bot_cls(
+            number,
+            share=share,
+            debug_scores=debug_scores,
+            cache_starting_words=not debug_scores,
+            use_solutions_list=use_solutions_list,
+        )
         play_game(bot, solution)
     except Exception:
         ipdb.post_mortem()
@@ -386,8 +413,10 @@ def debug_scores(ctx, strategy, number):
 @click.option(
     "-n", type=int, default=None, help="How many puzzles to do (default: all to date)"
 )
+@click.option("--debug-scores", is_flag=True)
+@click.option("--use-solutions-list", is_flag=True)
 @click.pass_context
-def bulk(ctx, strategy, n):
+def bulk(ctx, strategy, n, debug_scores, use_solutions_list):
     total_guesses = 0
     successes = 0
     if not n:
@@ -397,7 +426,9 @@ def bulk(ctx, strategy, n):
             solution = get_todays_word(number)
 
             bot_cls = GameBot if strategy == "simple" else WeightedScoreGameBot
-            bot = bot_cls(number)
+            bot = bot_cls(
+                number, debug_scores=debug_scores, use_solutions_list=use_solutions_list
+            )
             guesses, success = play_game(bot, solution)
             total_guesses += guesses
             successes += success

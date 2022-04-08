@@ -10,7 +10,7 @@ setup(
     license="MIT",
     packages=["bottle"],
     include_package_data=True,
-    install_requires=["click", "requests", "ipdb"],
+    install_requires=["click", "requests", "ipdb", "slack_bolt", "pyyaml"],
     zip_safe=False,
     entry_points={
         "console_scripts": [
